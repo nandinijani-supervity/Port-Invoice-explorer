@@ -1,362 +1,245 @@
 'use client'
 
 import { useState } from 'react'
-import { CheckCircle2, XCircle, Upload, Download, FileText } from 'lucide-react'
-import { AccentButton, NavyButton } from '@/components/ui/accent-button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-interface ValidationResult {
-  rule_id: number
-  rule_name: string
-  status: string
-  remarks: string
-}
-
-interface ValidationResponse {
-  extraction_data: {
-    invoice_number: string
-    invoice_date: string
-    vendor_name: string
-    po_number: string
-    total_amount: string
-    tax_amount: string
-    document_type: string
-    irn_number?: string
-    qr_code_present: boolean
-    vendor_gstin?: string
-  }
-  linked_po_found: boolean
-  linked_ses_found: boolean
-  results: ValidationResult[]
-  overall_status: string
-  report_id?: string
-}
+import { CheckCircle2, XCircle, Upload, Download } from 'lucide-react'
 
 export default function ExplorerPage() {
-  // Demo Mode: No authentication required
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const [validationData, setValidationData] = useState<ValidationResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [batchData, setBatchData] = useState(null)
+  const [progress, setProgress] = useState(0)
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0]
-      if (file.type !== 'application/pdf') {
-        setError('Please upload a PDF file')
-        return
-      }
-      setSelectedFile(file)
-      setError(null)
-      setValidationData(null)
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) {
+      // Store multiple files
+      setFiles(Array.from(event.target.files))
+      setProgress(0)
     }
   }
 
   const handleAnalyze = async () => {
-    if (!selectedFile) {
-      setError('Please select a PDF file')
-      return
-    }
+    if (files.length === 0) return
 
     setIsLoading(true)
-    setError(null)
+    setProgress(10)
 
     try {
       const formData = new FormData()
-      formData.append('file', selectedFile)
-
-      // Demo Mode: No authentication token needed
-      // Ensure we use port 8002 - check both env var and fallback
-      let API_URL = process.env.NEXT_PUBLIC_API_URL
       
-      // Validate and fix API_URL
-      if (!API_URL || 
-          API_URL.trim() === '' || 
-          API_URL.includes(':8000') || 
-          !API_URL.startsWith('http://') && !API_URL.startsWith('https://')) {
-        API_URL = 'http://localhost:8002'
-      }
-      
-      // Ensure API_URL doesn't end with a slash
-      API_URL = API_URL.trim().replace(/\/+$/, '')
-      
-      const BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH || '').trim()
-      const fullUrl = `${API_URL}${BASE_PATH}/api/invoices/validate`
-
-      console.log('=== Invoice Validation Request ===')
-      console.log('API_URL:', API_URL)
-      console.log('BASE_PATH:', BASE_PATH || '(empty)')
-      console.log('Full URL:', fullUrl)
-      console.log('Making request to:', fullUrl)
-
-      const response = await fetch(fullUrl, {
-        method: 'POST',
-        body: formData,
-        // Don't set Content-Type header - let browser set it with boundary for FormData
+      // Append all files to FormData
+      files.forEach((file) => {
+        formData.append('files', file)
       })
 
-      console.log('Response status:', response.status, response.statusText)
+      setProgress(30)
+
+      const response = await fetch('/api/validate-batch', {
+        method: 'POST',
+        body: formData,
+      })
+
+      setProgress(70)
 
       if (!response.ok) {
-        let errorMessage = `Server error: ${response.status} ${response.statusText}`
-        try {
-          const errorData = await response.json()
-          errorMessage = errorData.detail || errorData.message || errorMessage
-        } catch {
-          // If response is not JSON, use status text
-          const text = await response.text().catch(() => '')
-          errorMessage = text || errorMessage
-        }
-        throw new Error(errorMessage)
+        throw new Error('Batch validation failed')
       }
 
-      const data: ValidationResponse = await response.json()
-      setValidationData(data)
-    } catch (err) {
-      let errorMessage = 'Unknown error occurred'
-      if (err instanceof TypeError && err.message === 'Failed to fetch') {
-        let API_URL = process.env.NEXT_PUBLIC_API_URL
-        if (!API_URL || 
-            API_URL.trim() === '' || 
-            API_URL.includes(':8000') || 
-            !API_URL.startsWith('http://') && !API_URL.startsWith('https://')) {
-          API_URL = 'http://localhost:8002'
-        }
-        API_URL = API_URL.trim().replace(/\/+$/, '')
-        const BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH || '').trim()
-        const attemptedUrl = `${API_URL}${BASE_PATH}/api/invoices/validate`
-        errorMessage = `Unable to connect to the server. Please ensure the backend API is running and accessible at ${attemptedUrl}. Check: 1) Backend is running on port 8002 (run: uvicorn app.main:app --reload --host 0.0.0.0 --port 8002), 2) No firewall blocking the connection, 3) CORS is properly configured.`
-      } else if (err instanceof Error) {
-        errorMessage = err.message
-      }
-      setError(errorMessage)
-      console.error('Error validating invoice:', err)
-      let errorAPI_URL = process.env.NEXT_PUBLIC_API_URL
-      if (!errorAPI_URL || 
-          errorAPI_URL.trim() === '' || 
-          errorAPI_URL.includes(':8000') || 
-          !errorAPI_URL.startsWith('http://') && !errorAPI_URL.startsWith('https://')) {
-        errorAPI_URL = 'http://localhost:8002'
-      }
-      errorAPI_URL = errorAPI_URL.trim().replace(/\/+$/, '')
-      const errorBASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH || '').trim()
-      console.error('Attempted URL:', `${errorAPI_URL}${errorBASE_PATH}/api/invoices/validate`)
+      const result = await response.json()
+      setBatchData(result)
+      setProgress(100)
+    } catch (error) {
+      console.error('Error processing batch:', error)
+      setProgress(0)
     } finally {
       setIsLoading(false)
     }
   }
 
   const handleDownloadReport = async () => {
-    if (!validationData?.report_id) return
+    if (!batchData?.batch_report_id) return
 
     try {
-      // Demo Mode: No authentication token needed
-      let API_URL = process.env.NEXT_PUBLIC_API_URL
-      if (!API_URL || 
-          API_URL.trim() === '' || 
-          API_URL.includes(':8000') || 
-          !API_URL.startsWith('http://') && !API_URL.startsWith('https://')) {
-        API_URL = 'http://localhost:8002'
-      }
-      API_URL = API_URL.trim().replace(/\/+$/, '')
-      const BASE_PATH = (process.env.NEXT_PUBLIC_BASE_PATH || '').trim()
-      const reportUrl = `${API_URL}${BASE_PATH}/api/invoices/report/${validationData.report_id}`
-
-      const response = await fetch(reportUrl)
-
-      if (!response.ok) {
-        throw new Error('Failed to download report')
-      }
+      const response = await fetch(`/api/download-batch-report/${batchData.batch_report_id}`)
+      if (!response.ok) throw new Error('Download failed')
 
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `invoice_validation_report_${validationData.report_id}.xlsx`
+      a.download = `batch_report_${batchData.batch_report_id}.xlsx`
       document.body.appendChild(a)
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
-    } catch (err) {
-      console.error('Error downloading report:', err)
-      setError('Failed to download report. Please try again.')
+    } catch (error) {
+      console.error('Error downloading report:', error)
     }
   }
 
-  // Demo Mode: Always show content without authentication check
   return (
-    <div className='h-full space-y-6'>
-      <div>
-        <h1 className='text-4xl font-bold text-gray-900'>Invoice Explorer</h1>
-        <p className='mt-2 text-lg text-gray-600'>
-          Upload and validate vendor invoices against purchase orders
-        </p>
-      </div>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+      <div className="max-w-4xl mx-auto">
+        <h1 className="text-4xl font-bold text-gray-800 mb-2">Invoice Explorer</h1>
+        <p className="text-gray-600 mb-8">Smart Batch Processing & Analytics Hub</p>
 
-      <div className='grid gap-6 lg:grid-cols-2'>
-        {/* Left: Upload Section */}
-        <Card className='border-0 bg-white shadow-sm'>
-          <CardHeader className='border-b border-gray-100'>
-            <CardTitle className='text-xl font-semibold text-gray-900'>
-              Upload Invoice
-            </CardTitle>
-          </CardHeader>
-          <CardContent className='space-y-6 p-6'>
-            <div className='space-y-4'>
-              <div>
-                <label className='mb-2 block text-sm font-medium text-gray-700'>
-                  Select PDF File
-                </label>
-                <div className='relative'>
-                  <input
-                    type='file'
-                    accept='.pdf'
-                    onChange={handleFileChange}
-                    className='block w-full text-sm text-gray-500 file:mr-4 file:rounded-lg file:border-0 file:bg-[#000b37] file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-[#1a1f3a]'
-                    disabled={isLoading}
-                  />
-                </div>
-                {selectedFile && (
-                  <div className='mt-2 flex items-center gap-2 text-sm text-gray-600'>
-                    <FileText className='h-4 w-4' />
-                    <span>{selectedFile.name}</span>
-                  </div>
-                )}
-              </div>
+        {/* File Upload Section */}
+        <div className="bg-white rounded-lg shadow-lg p-8 mb-8">
+          <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
+            <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+            <p className="text-gray-600 mb-4">
+              Drag and drop your PDF invoices here, or click to select files
+            </p>
+            <input
+              type="file"
+              multiple
+              accept=".pdf,.zip"
+              onChange={handleFileChange}
+              className="hidden"
+              id="file-input"
+            />
+            <label htmlFor="file-input" className="inline-block">
+              <button className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition">
+                Select Files
+              </button>
+            </label>
+          </div>
 
-              {error && (
-                <div className='rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700'>
-                  {error}
-                </div>
-              )}
+          {files.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                Selected Files ({files.length})
+              </h3>
+              <ul className="space-y-2">
+                {files.map((file, idx) => (
+                  <li key={idx} className="text-gray-600 flex items-center">
+                    <span className="mr-2">📄</span>
+                    {file.name}
+                  </li>
+                ))}
+              </ul>
 
-              <AccentButton
+              <button
                 onClick={handleAnalyze}
-                disabled={!selectedFile || isLoading}
-                className='w-full'
+                disabled={isLoading}
+                className="mt-6 w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition disabled:bg-gray-400"
               >
-                {isLoading ? (
-                  <>
-                    <div className='mr-2 h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600'></div>
-                    Analyzing...
-                  </>
-                ) : (
-                  <>
-                    <Upload className='mr-2 h-4 w-4' />
-                    Analyze Invoice
-                  </>
-                )}
-              </AccentButton>
+                {isLoading ? 'Processing...' : 'Analyze Batch'}
+              </button>
             </div>
-          </CardContent>
-        </Card>
+          )}
+        </div>
 
-        {/* Right: Results Section */}
-        <Card className='border-0 bg-white shadow-sm'>
-          <CardHeader className='border-b border-gray-100'>
-            <CardTitle className='text-xl font-semibold text-gray-900'>
-              Validation Results
-            </CardTitle>
-          </CardHeader>
-          <CardContent className='p-6'>
-            {validationData ? (
-              <div className='space-y-6'>
-                {/* Header with PO/SES Status */}
-                <div className='space-y-3'>
-                  <div className='flex items-center gap-4'>
-                    <span className='text-sm font-medium text-gray-700'>PO Linked:</span>
-                    {validationData.linked_po_found ? (
-                      <span className='inline-flex items-center gap-1 rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-800'>
-                        <CheckCircle2 className='h-4 w-4' />
-                        {validationData.extraction_data.po_number}
-                      </span>
-                    ) : (
-                      <span className='inline-flex items-center gap-1 rounded-full bg-red-100 px-3 py-1 text-sm font-semibold text-red-800'>
-                        <XCircle className='h-4 w-4' />
-                        Not Found
-                      </span>
-                    )}
-                  </div>
-                  <div className='flex items-center gap-4'>
-                    <span className='text-sm font-medium text-gray-700'>SES Linked:</span>
-                    {validationData.linked_ses_found ? (
-                      <span className='inline-flex items-center gap-1 rounded-full bg-green-100 px-3 py-1 text-sm font-semibold text-green-800'>
-                        <CheckCircle2 className='h-4 w-4' />
-                        Found
-                      </span>
-                    ) : (
-                      <span className='inline-flex items-center gap-1 rounded-full bg-red-100 px-3 py-1 text-sm font-semibold text-red-800'>
-                        <XCircle className='h-4 w-4' />
-                        Not Found
-                      </span>
-                    )}
-                  </div>
-                </div>
+        {/* Progress Bar */}
+        {isLoading && (
+          <div className="bg-white rounded-lg shadow-lg p-6 mb-8">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-gray-700 font-semibold">Processing invoices...</p>
+              <span className="text-gray-600">{progress}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div
+                className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          </div>
+        )}
 
-                {/* Validation Rules Table */}
-                <div className='overflow-x-auto'>
-                  <table className='w-full border-collapse'>
-                    <thead>
-                      <tr className='border-b border-gray-200 bg-gray-50'>
-                        <th className='px-4 py-3 text-left text-sm font-semibold text-gray-700'>
-                          Rule Name
-                        </th>
-                        <th className='px-4 py-3 text-center text-sm font-semibold text-gray-700'>
-                          Status
-                        </th>
-                        <th className='px-4 py-3 text-left text-sm font-semibold text-gray-700'>
-                          Remarks
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {validationData.results.map((result) => (
-                        <tr
-                          key={result.rule_id}
-                          className='border-b border-gray-100 hover:bg-gray-50'
-                        >
-                          <td className='px-4 py-3 text-sm text-gray-900'>
-                            {result.rule_name}
-                          </td>
-                          <td className='px-4 py-3 text-center'>
-                            {result.status.toLowerCase() === 'pass' ? (
-                              <CheckCircle2 className='mx-auto h-5 w-5 text-green-500' />
-                            ) : (
-                              <XCircle className='mx-auto h-5 w-5 text-red-500' />
-                            )}
-                          </td>
-                          <td className='px-4 py-3 text-sm text-gray-600'>{result.remarks}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Download Report Button */}
-                {validationData.report_id && (
-                  <div className='pt-4'>
-                    <NavyButton
-                      onClick={handleDownloadReport}
-                      className='w-full'
-                    >
-                      <Download className='mr-2 h-4 w-4' />
-                      Download Compliance Report
-                    </NavyButton>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className='flex h-64 items-center justify-center text-gray-500'>
-                <div className='text-center'>
-                  <FileText className='mx-auto h-12 w-12 text-gray-400' />
-                  <p className='mt-4 text-sm'>Upload and analyze an invoice to see results</p>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* Batch Results */}
+        {batchData && <BatchResultsTable batchData={batchData} onDownload={handleDownloadReport} />}
       </div>
     </div>
   )
 }
 
+function BatchResultsTable({ batchData, onDownload }) {
+  return (
+    <div className="bg-white rounded-lg shadow-lg p-8 space-y-6">
+      {/* Summary Cards */}
+      <div>
+        <h2 className="text-2xl font-bold text-gray-800 mb-4">Batch Summary</h2>
+        <div className="grid grid-cols-3 gap-4">
+          <div className="bg-blue-50 p-6 rounded-lg border border-blue-200">
+            <p className="text-gray-600 text-sm font-semibold">Total Processed</p>
+            <p className="text-3xl font-bold text-blue-600">{batchData.summary.total_processed}</p>
+          </div>
+          <div className="bg-green-50 p-6 rounded-lg border border-green-200">
+            <p className="text-gray-600 text-sm font-semibold">Passed</p>
+            <div className="flex items-center">
+              <CheckCircle2 className="h-8 w-8 text-green-600 mr-2" />
+              <p className="text-3xl font-bold text-green-600">{batchData.summary.total_passed}</p>
+            </div>
+          </div>
+          <div className="bg-red-50 p-6 rounded-lg border border-red-200">
+            <p className="text-gray-600 text-sm font-semibold">Failed</p>
+            <div className="flex items-center">
+              <XCircle className="h-8 w-8 text-red-600 mr-2" />
+              <p className="text-3xl font-bold text-red-600">{batchData.summary.total_failed}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Results Table */}
+      <div>
+        <h3 className="text-xl font-bold text-gray-800 mb-4">Batch Results</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="bg-gray-100 border-b-2 border-gray-300">
+                <th className="px-4 py-3 text-left text-gray-700 font-semibold">Filename</th>
+                <th className="px-4 py-3 text-left text-gray-700 font-semibold">Invoice Number</th>
+                <th className="px-4 py-3 text-left text-gray-700 font-semibold">PO Number</th>
+                <th className="px-4 py-3 text-left text-gray-700 font-semibold">Status</th>
+                <th className="px-4 py-3 text-left text-gray-700 font-semibold">Top Failure Reasons</th>
+              </tr>
+            </thead>
+            <tbody>
+              {batchData.results.map((result, idx) => (
+                <tr key={idx} className="border-b border-gray-200 hover:bg-gray-50">
+                  <td className="px-4 py-3 text-gray-800">{result.filename}</td>
+                  <td className="px-4 py-3 text-gray-800">
+                    {result.extraction_data?.invoice_number || 'N/A'}
+                  </td>
+                  <td className="px-4 py-3 text-gray-800">
+                    {result.extraction_data?.po_number || 'N/A'}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold ${
+                        result.status === 'passed'
+                          ? 'bg-green-100 text-green-800'
+                          : 'bg-red-100 text-red-800'
+                      }`}
+                    >
+                      {result.status === 'passed' ? (
+                        <CheckCircle2 className="h-4 w-4 mr-1" />
+                      ) : (
+                        <XCircle className="h-4 w-4 mr-1" />
+                      )}
+                      {result.status.charAt(0).toUpperCase() + result.status.slice(1)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-gray-600 text-sm">
+                    {result.validation_results?.failing_rules
+                      ?.slice(0, 3)
+                      .join(', ') || 'None'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Download Button */}
+      <button
+        onClick={onDownload}
+        className="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition flex items-center justify-center gap-2"
+      >
+        <Download className="h-5 w-5" />
+        Download Consolidated Excel Report
+      </button>
+    </div>
+  )
+}

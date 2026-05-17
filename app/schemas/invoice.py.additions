@@ -1,0 +1,34 @@
+# Add these models to app/schemas/invoice.py
+
+from pydantic import BaseModel
+from typing import List, Optional
+
+class BatchValidationSummary(BaseModel):
+    """Summary statistics for batch validation"""
+    total_processed: int
+    total_passed: int
+    total_failed: int
+
+
+class BatchValidationResponse(BaseModel):
+    """Aggregated response for batch invoice validation"""
+    batch_id: str
+    summary: BatchValidationSummary
+    results: List['ValidationResponse']  # Existing schema
+    batch_report_id: str
+    timestamp: str
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "batch_id": "batch_123456",
+                "summary": {
+                    "total_processed": 5,
+                    "total_passed": 4,
+                    "total_failed": 1
+                },
+                "results": [],
+                "batch_report_id": "report_123456",
+                "timestamp": "2026-05-17T10:30:00Z"
+            }
+        }

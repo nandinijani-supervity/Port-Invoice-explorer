@@ -1,0 +1,212 @@
+# Add this function to app/utils/report_generator.py
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils.dataframe import dataframe_to_rows
+import pandas as pd
+from datetime import datetime
+import os
+
+def generate_batch_excel_report(
+    batch_id: str,
+    batch_report_id: str,
+    results: list,
+    summary: dict
+) -> str:
+    """
+    Generate a consolidated Excel workbook for batch validation results.
+    
+    Structure:
+    - Sheet 1: Summary (batch metrics and metadata)
+    - Sheet 2: All Results (quick-scan table of all invoices)
+    - Sheets 3+: Individual invoice details
+    
+    Args:
+        batch_id: Unique batch identifier
+        batch_report_id: Report identifier for retrieval
+        results: List of validation results
+        summary: Summary statistics dict with total_processed, total_passed, total_failed
+    
+    Returns:
+        Path to generated Excel file
+    """
+    
+    # Create reports directory if it doesn't exist
+    os.makedirs('./reports', exist_ok=True)
+    
+    file_path = f"./reports/{batch_report_id}.xlsx"
+    
+    # Create workbook
+    wb = Workbook()
+    
+    # Remove default sheet
+    if 'Sheet' in wb.sheetnames:
+        wb.remove(wb['Sheet'])
+    
+    # ============ Sheet 1: Summary ============
+    ws_summary = wb.create_sheet('Summary', 0)
+    
+    # Header styling
+    header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+    header_font = Font(bold=True, color='FFFFFF', size=12)
+    
+    # Add header
+    ws_summary['A1'] = 'Batch Validation Report'
+    ws_summary['A1'].font = Font(bold=True, size=14, color='4472C4')
+    
+    # Add metadata
+    ws_summary['A3'] = 'Batch ID:'
+    ws_summary['B3'] = batch_id
+    ws_summary['A4'] = 'Report Generated:'
+    ws_summary['B4'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    ws_summary['A5'] = 'Total Files Processed:'
+    ws_summary['B5'] = summary.get('total_processed', 0)
+    
+    # Add summary metrics
+    ws_summary['A7'] = 'Summary Metrics'
+    ws_summary['A7'].font = Font(bold=True, size=12, color='4472C4')
+    
+    ws_summary['A9'] = 'Status'
+    ws_summary['B9'] = 'Count'
+    for cell in ['A9', 'B9']:
+        ws_summary[cell].fill = header_fill
+        ws_summary[cell].font = header_font
+    
+    # Metrics rows
+    ws_summary['A10'] = 'Passed'
+    ws_summary['B10'] = summary.get('total_passed', 0)
+    ws_summary['B10'].fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+    
+    ws_summary['A11'] = 'Failed'
+    ws_summary['B11'] = summary.get('total_failed', 0)
+    ws_summary['B11'].fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+    
+    # Adjust column widths
+    ws_summary.column_dimensions['A'].width = 25
+    ws_summary.column_dimensions['B'].width = 25
+    
+    # ============ Sheet 2: All Results ============
+    ws_results = wb.create_sheet('All Results', 1)
+    
+    # Header row
+    headers = ['Filename', 'Invoice Number', 'PO Number', 'Vendor', 'Total Amount', 'Status', 'Top Failure Reasons']
+    for col_num, header in enumerate(headers, 1):
+        cell = ws_results.cell(row=1, column=col_num)
+        cell.value = header
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    
+    # Add data rows
+    for row_num, result in enumerate(results, 2):
+        extraction = result.get('extraction_data', {})
+        validation = result.get('validation_results', {})
+        status = result.get('status', 'unknown')
+        
+        # Status color
+        if status == 'passed':
+            status_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+        else:
+            status_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+        
+        # Row data
+        row_data = [
+            result.get('filename', ''),
+            extraction.get('invoice_number', ''),
+            extraction.get('po_number', ''),
+            extraction.get('vendor_name', ''),
+            extraction.get('total_amount', ''),
+            status.upper(),
+            ', '.join(validation.get('failing_rules', [])[:3])
+        ]
+        
+        for col_num, value in enumerate(row_data, 1):
+            cell = ws_results.cell(row=row_num, column=col_num)
+            cell.value = value
+            if col_num == 6:  # Status column
+                cell.fill = status_fill
+            cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+    
+    # Adjust column widths
+    ws_results.column_dimensions['A'].width = 20
+    ws_results.column_dimensions['B'].width = 18
+    ws_results.column_dimensions['C'].width = 15
+    ws_results.column_dimensions['D'].width = 20
+    ws_results.column_dimensions['E'].width = 15
+    ws_results.column_dimensions['F'].width = 12
+    ws_results.column_dimensions['G'].width = 40
+    
+    # ============ Sheets 3+: Individual Invoice Details ============
+    for idx, result in enumerate(results, 1):
+        sheet_name = f"Invoice {idx}"
+        # Limit sheet name to 31 characters (Excel limit)
+        sheet_name = sheet_name[:31]
+        ws_detail = wb.create_sheet(sheet_name)
+        
+        extraction = result.get('extraction_data', {})
+        validation = result.get('validation_results', {})
+        
+        # Invoice details section
+        current_row = 1
+        
+        ws_detail[f'A{current_row}'] = 'Invoice Details'
+        ws_detail[f'A{current_row}'].font = Font(bold=True, size=12, color='4472C4')
+        current_row += 1
+        
+        # Key-value pairs
+        details = [
+            ('Filename', result.get('filename', '')),
+            ('Invoice Number', extraction.get('invoice_number', '')),
+            ('PO Number', extraction.get('po_number', '')),
+            ('Vendor Name', extraction.get('vendor_name', '')),
+            ('Invoice Date', extraction.get('invoice_date', '')),
+            ('Due Date', extraction.get('due_date', '')),
+            ('Total Amount', extraction.get('total_amount', '')),
+            ('Currency', extraction.get('currency', '')),
+            ('Validation Status', result.get('status', 'unknown').upper()),
+        ]
+        
+        for label, value in details:
+            ws_detail[f'A{current_row}'] = label
+            ws_detail[f'B{current_row}'] = value
+            ws_detail[f'A{current_row}'].font = Font(bold=True)
+            current_row += 1
+        
+        # Validation rules section
+        current_row += 1
+        ws_detail[f'A{current_row}'] = 'Validation Results'
+        ws_detail[f'A{current_row}'].font = Font(bold=True, size=12, color='4472C4')
+        current_row += 1
+        
+        # Rule headers
+        ws_detail[f'A{current_row}'] = 'Rule'
+        ws_detail[f'B{current_row}'] = 'Status'
+        ws_detail[f'C{current_row}'] = 'Message'
+        for col in ['A', 'B', 'C']:
+            ws_detail[f'{col}{current_row}'].fill = header_fill
+            ws_detail[f'{col}{current_row}'].font = header_font
+        current_row += 1
+        
+        # Validation details
+        for rule_name, rule_status in validation.get('rule_results', {}).items():
+            ws_detail[f'A{current_row}'] = rule_name
+            ws_detail[f'B{current_row}'] = rule_status.get('passed', False)
+            ws_detail[f'C{current_row}'] = rule_status.get('message', '')
+            
+            if not rule_status.get('passed', False):
+                ws_detail[f'B{current_row}'].fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+            else:
+                ws_detail[f'B{current_row}'].fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+            
+            current_row += 1
+        
+        # Adjust column widths
+        ws_detail.column_dimensions['A'].width = 25
+        ws_detail.column_dimensions['B'].width = 25
+        ws_detail.column_dimensions['C'].width = 50
+    
+    # Save workbook
+    wb.save(file_path)
+    print(f"Batch report generated: {file_path}")
+    
+    return file_path
