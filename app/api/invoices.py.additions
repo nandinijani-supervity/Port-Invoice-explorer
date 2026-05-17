@@ -1,0 +1,134 @@
+# Add these imports and endpoint to app/api/invoices.py
+
+from typing import List
+import asyncio
+import uuid
+from datetime import datetime
+from fastapi import UploadFile, File
+from app.schemas.invoice import BatchValidationResponse, BatchValidationSummary
+from app.utils.report_generator import generate_batch_excel_report
+
+@router.post("/validate-batch", response_model=BatchValidationResponse)
+async def validate_batch_invoices(
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Validate multiple invoice PDFs concurrently.
+    
+    - Accepts multiple PDF files via multipart/form-data
+    - Processes all files concurrently using asyncio.gather
+    - Returns aggregated validation results and batch report ID
+    
+    Query Parameters:
+    - files: List of PDF files to validate
+    
+    Returns:
+        BatchValidationResponse with summary metrics and individual results
+    """
+    batch_id = f"batch_{uuid.uuid4().hex[:12]}"
+    batch_report_id = f"report_{uuid.uuid4().hex[:12]}"
+    
+    # Validate that files were provided
+    if not files or len(files) == 0:
+        raise HTTPException(status_code=400, detail="No files provided")
+    
+    # Create validation tasks for all files
+    validation_tasks = []
+    for file in files:
+        task = validate_single_invoice_async(file, db)
+        validation_tasks.append(task)
+    
+    # Execute all validations concurrently
+    results = await asyncio.gather(*validation_tasks, return_exceptions=True)
+    
+    # Filter out exceptions and handle errors
+    valid_results = []
+    failed_count = 0
+    passed_count = 0
+    
+    for result in results:
+        if isinstance(result, Exception):
+            # Log error but continue processing
+            continue
+        
+        valid_results.append(result)
+        
+        # Count passes/failures
+        if result.get('status') == 'passed':
+            passed_count += 1
+        else:
+            failed_count += 1
+    
+    # Generate batch summary
+    summary = BatchValidationSummary(
+        total_processed=len(valid_results),
+        total_passed=passed_count,
+        total_failed=failed_count
+    )
+    
+    # Generate Excel report
+    try:
+        generate_batch_excel_report(
+            batch_id=batch_id,
+            batch_report_id=batch_report_id,
+            results=valid_results,
+            summary=summary
+        )
+    except Exception as e:
+        print(f"Error generating batch report: {e}")
+    
+    return BatchValidationResponse(
+        batch_id=batch_id,
+        summary=summary,
+        results=valid_results,
+        batch_report_id=batch_report_id,
+        timestamp=datetime.utcnow().isoformat() + "Z"
+    )
+
+
+async def validate_single_invoice_async(file: UploadFile, db: Session):
+    """
+    Async wrapper for single invoice validation.
+    
+    This allows multiple invoices to be validated concurrently.
+    """
+    try:
+        # Read file content
+        content = await file.read()
+        
+        # Call existing validation logic
+        # (Assuming you have a sync validate_invoice function)
+        result = await asyncio.to_thread(
+            validate_invoice_sync,
+            content,
+            file.filename,
+            db
+        )
+        
+        return result
+    except Exception as e:
+        print(f"Error validating {file.filename}: {e}")
+        raise
+
+
+@router.get("/download-batch-report/{batch_report_id}")
+async def download_batch_report(batch_report_id: str):
+    """
+    Download the consolidated Excel report for a batch.
+    """
+    try:
+        file_path = f"./reports/{batch_report_id}.xlsx"
+        
+        # Check if file exists
+        import os
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Report not found")
+        
+        return FileResponse(
+            path=file_path,
+            filename=f"batch_report_{batch_report_id}.xlsx",
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error downloading report: {str(e)}")
